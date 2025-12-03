@@ -1,0 +1,3 @@
+streamlit
+mendeleev
+sqlalchemy<2.0
