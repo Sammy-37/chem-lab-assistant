@@ -1,83 +1,114 @@
 import streamlit as st
-import re
+import pubchempy as pcp
 
-st.set_page_config(page_title="ChemCalc Pro", page_icon="⚗️")
+# 1. PAGE SETUP
+st.set_page_config(page_title="ChemCalc Pro", page_icon="🧪")
 
-st.title("⚗️ ChemCalc: Lab Assistant")
-
-# --- DEBUGGING SECTION ---
-# This block attempts to load the library and tells you if it fails
-try:
-    with st.spinner("Loading Periodic Table Database..."):
-        from mendeleev import element
-    st.success("✅ System Status: Mendeleev Library Loaded Successfully")
-except ImportError:
-    st.error("❌ Critical Error: 'mendeleev' library not found. Please run 'pip install mendeleev'.")
-    st.stop()
-except Exception as e:
-    st.error(f"❌ Database Error: {e}")
-    st.info("Try running 'mendeleev-install' in your terminal to fix the database.")
-    st.stop()
+st.title("🧪 ChemCalc: ")
+st.markdown("---")
 
 
-# --- LOGIC ---
-def calculate_molar_mass(formula):
-    if not formula:
-        return 0, "Please enter a formula"
+# 2. LOGIC: FETCH FROM PUBCHEM
+def get_compound_details(query):
+    try:
+        # Search PubChem for the compound
+        compounds = pcp.get_compounds(query, 'name')
 
-    # Regex to capture "Element" and "Count"
-    tokens = re.findall(r'([A-Z][a-z]*)(\d*)', formula)
+        if not compounds:
+            # If name search fails, try formula search
+            compounds = pcp.get_compounds(query, 'formula')
 
-    if not tokens:
-        return 0, "Error: Check capitalization (e.g., Use 'H', not 'h')"
+        if compounds:
+            c = compounds[0]
 
-    total_mass = 0
-    details = []
+            # Get Synonyms (Alternative Names) - Top 5
+            synonyms = c.synonyms[:5] if c.synonyms else ["No common synonyms found"]
 
-    for symbol, count in tokens:
-        try:
-            # FETCH DATA FROM LIBRARY
-            atom = element(symbol)  # This queries the database
-            mass_val = atom.atomic_weight
-
-            num_atoms = int(count) if count else 1
-            total_mass += mass_val * num_atoms
-            details.append(f"{num_atoms}x{symbol} ({mass_val:.2f})")
-
-        except Exception:
-            return 0, f"Error: Element '{symbol}' does not exist in the periodic table."
-
-    return total_mass, " + ".join(details)
+            return {
+                "name": c.iupac_name if c.iupac_name else "Unknown Name",
+                "formula": c.molecular_formula,
+                "weight": float(c.molecular_weight),
+                "cid": c.cid,
+                "synonyms": ", ".join(synonyms),
+                "image": f"https://pubchem.ncbi.nlm.nih.gov/image/imagefly.cgi?cid={c.cid}&width=400&height=400"
+            }
+        else:
+            return None
+    except Exception as e:
+        return None
 
 
-# --- UI ---
-st.header("1. Molar Mass Calculator")
-formula_input = st.text_input("Enter Formula:", "C6H12O6")
+# 3. UI: SECTION 1 - COMPOUND VALIDATOR
+st.header("1. Compound Validator & Properties")
+user_input = st.text_input("Enter Name or Formula (e.g., Aspirin, H2SO4):", "Aspirin")
 
-if st.button("Calculate Mass"):
-    mass, log = calculate_molar_mass(formula_input)
+if st.button("Search & Validate"):
+    with st.spinner(f"Searching PubChem for '{user_input}'..."):
+        data = get_compound_details(user_input)
 
-    if mass > 0:
-        st.success(f"Molar Mass: {mass:.3f} g/mol")
-        st.text(f"Breakdown: {log}")
-        st.session_state['saved_mass'] = mass
+    if data:
+        st.success(f"✅ Found: {data['name']}")
+
+        col1, col2 = st.columns([1, 2])
+
+        with col1:
+            st.image(data['image'], caption=f"PubChem CID: {data['cid']}")
+
+        with col2:
+            st.metric("Molecular Formula", data['formula'])
+            st.metric("Molar Mass", f"{data['weight']} g/mol")
+
+            st.markdown("### Alternative Names")
+            st.info(data['synonyms'])
+
+        # Save mass and name for the next calculator (Section 2)
+        st.session_state['saved_mass'] = data['weight']
+        st.session_state['saved_name'] = data['name']
+
     else:
-        st.error(log)
+        st.error(f"❌ Compound '{user_input}' not found in PubChem database.")
+        st.warning("Note: This validates that the chemical *exists* in nature.")
 
 st.markdown("---")
 
-st.header("2. Solution Prep")
+# 4. UI: SECTION 2 - SOLUTION PREPARATION
+st.header("2. Solution Preparation")
+
+# Check if we have a saved compound from Section 1
+current_name = st.session_state.get('saved_name', "Custom Compound")
+
+if current_name != "Custom Compound":
+    st.success(f"🧪 Preparing solution for: **{current_name}**")
+else:
+    st.info("Enter Molar Mass manually or validate a compound above.")
+
+# Create columns for inputs
 c1, c2 = st.columns(2)
+
 with c1:
+    # Auto-fill Molar Mass if available
     default_m = st.session_state.get('saved_mass', 0.0)
-    solute_mm = st.number_input("Molar Mass (g/mol)", value=float(default_m), format="%.3f")
-    molarity = st.number_input("Molarity (M)", value=0.5)
+    solute_mm = st.number_input("Molar Mass (g/mol)", value=default_m, format="%.3f")
+
+    # Input for Molarity
+    molarity = st.number_input("Desired Molarity (M)", value=0.5)
+
 with c2:
+    # Input for Volume
     vol = st.number_input("Volume (mL)", value=500.0)
 
-if st.button("Calculate Grams"):
+# Calculate Button
+if st.button("Calculate Grams Needed"):
     if solute_mm > 0:
+        # Stoichiometry Formula: Mass = Molarity * Volume(L) * Molar Mass
         grams = molarity * (vol / 1000) * solute_mm
-        st.info(f"Weigh out **{grams:.3f} g**")
+
+        st.markdown(f"""
+        <div style="background-color: #d1fae5; padding: 20px; border-radius: 10px; border: 1px solid #10b981;">
+            <h3 style="color: #065f46; margin:0;">⚖️ Result: Weigh out {grams:.3f} grams</h3>
+            <p style="color: #047857;">Dissolve this amount in {vol} mL of solvent to get a {molarity} M solution.</p>
+        </div>
+        """, unsafe_allow_html=True)
+
     else:
-        st.warning("Calculate Molar Mass first!")
+        st.warning("⚠️ Please enter a valid Molar Mass first.")
